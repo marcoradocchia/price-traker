@@ -1,0 +1,212 @@
+#!/bin/python
+
+import argparse
+
+from bs4 import BeautifulSoup
+from datetime import date
+from json import loads as json_loads
+from json import dumps as json_dumps
+from matplotlib import dates as mpl_dates
+from matplotlib import pyplot as plt
+from matplotlib.ticker import MultipleLocator
+from requests import get
+from sys import exit as sys_exit
+from os import system as os_system
+
+
+# UTILS --------------------------------------------------------------------- #
+def get_date() -> str:
+    return f'{date.today().year}-{date.today().month}-{date.today().day}'
+
+
+def write_file(products: list) -> None:
+    with open('products.json', 'w+') as products_file:
+        products_file.write(json_dumps(products, indent=4))
+
+    return
+
+
+def get_page(url: str): # Return type ??
+    request_headers = { "User-agent": 'Mozilla/5.0 (Windows NT 6.1; WOW64) App\
+        leWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11' }
+    try:
+        page = BeautifulSoup(
+            get(url, headers=request_headers).text,
+            'lxml'
+        )
+    except:
+        sys_exit(f'Unable to load the page: {url}')
+
+    return page
+
+
+def get_products() -> list:
+    with open('products.json', 'r') as products_file:
+        products = json_loads(products_file.read())
+
+    return products
+
+
+def send_notification(product, price):
+    # TODO add telegram, e-mail notification
+    os_system(f'notify-send -a "Price Traker" "{product}"\
+        "Current price: {price}"')
+    return
+
+
+# FEATURES ------------------------------------------------------------------ #
+def insert_product(url: str) -> None:
+    if not url.startswith('https://www.amazon'):
+        sys_exit('Error: Insert a valid Amazon url')
+    page = get_page(url=url)
+    products_list = get_products()
+    products_list.append(
+        {
+            "url": url,
+            "title": page.find(id='productTitle').text.strip('\n'),
+            "prices": [
+                {
+                    "date": get_date(),
+                    "price": float(page.find(id='priceblock_ourprice').text\
+                        .strip('\n')[:-1].replace(',', '.'))
+                }
+            ]
+        }
+    )
+    write_file(products_list)
+
+    return
+
+
+def list_products() -> None:
+    products_list = get_products()
+    for index, product in enumerate(products_list):
+        print(f'{index+1}. {product["title"]}')
+
+
+def plot_prices() -> None:
+    # TODO
+    plt.style.use('ggplot')
+    plt.xlabel('Date')
+    plt.ylabel('Price (€)')
+    plt.title('Price Traker')
+    products_list = get_products()
+    for product in products_list:
+        x = []; y = []
+        for prices in product["prices"]:
+            date_ = prices["date"].split('-')
+            x.append(date(int(date_[0]), int(date_[1]), int(date_[2])))
+            y.append(prices["price"])
+        plt.plot_date(
+            x,
+            y,
+            label=product["title"][:30],
+            linestyle='solid'
+        )
+    plt.gcf().autofmt_xdate()
+    date_format = mpl_dates.DateFormatter('%b, %d')
+    ax = plt.gca()
+    ax.yaxis.grid(True, 'minor')
+    ax.yaxis.set_major_locator(MultipleLocator(10))
+    ax.yaxis.set_minor_locator(MultipleLocator(5))
+    ax.xaxis.set_major_locator(mpl_dates.DayLocator(interval=1))
+    ax.xaxis.set_major_formatter(date_format)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    return
+
+
+def update_prices() -> None:
+    products_list = get_products()
+    for product in products_list:
+        # if the last price update is today, ignore updating for that product
+        if product["prices"][-1]["date"] == get_date(): continue
+        page = get_page(url=product["url"])
+        current_price = float(page.find(id='priceblock_ourprice').text.\
+            strip('\n')[:-1].replace(',', '.'))
+        if current_price < product["prices"][-1]["price"]:
+            send_notification(
+                product=product["title"],
+                price=current_price
+            )
+        product["prices"].append(
+            {
+                "date": get_date(),
+                "price": current_price
+            }
+        )
+        # sends notification if a product has lower price than last check
+    write_file(products=products_list)
+
+    return
+
+
+# ARGUMENTS ----------------------------------------------------------------- #
+argparser = argparse.ArgumentParser(
+    description='Amazon prices traking tool',
+)
+argparser.add_argument(
+    '-u', '--update',
+    action='store_true',
+    help='Updates prices for every product'
+)
+argparser.add_argument(
+    '-i', '--insert',
+    type=str,
+    help='Insert new product to the traking list providing Amazon\'s pro\
+        duct url'
+)
+# argparser.add_argument(
+    # '-r', '--remove',
+    # type=str,
+    # help='Remove product from the traking list'
+# )
+argparser.add_argument(
+    '-p', '--plot',
+    action='store_true',
+    help='Updates prices for every product'
+)
+argparser.add_argument(
+    '-l', '--list',
+    action='store_true',
+    help='Lists all the traked products'
+)
+exclusives = argparser.add_mutually_exclusive_group()
+exclusives.add_argument(
+    '-q', '--quiet',
+    action='store_true',
+    help='No output shown'
+)
+args = argparser.parse_args()
+
+
+# MAIN ---------------------------------------------------------------------- #
+def main() -> None:
+    if args.insert is not None:
+        insert_product(url=args.insert)
+    if args.update:
+        print()
+        update_prices()
+    if args.plot:
+        plot_prices()
+    if args.list:
+        list_products()
+    return
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
+    # infos = {
+        # 'url': URL,
+        # 'title': title,
+        # 'price_history': price
+    # }
+
+# title = page.find('span', id='productTitle').text.strip('\n')
