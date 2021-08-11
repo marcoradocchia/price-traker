@@ -1,1 +1,1 @@
-# Price Traker: Amazon price traking tool
+# Price Traker: Amazon price tracking tool
