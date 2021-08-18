@@ -3,6 +3,7 @@
 import argparse
 
 from bs4 import BeautifulSoup
+from crontab import CronTab
 from datetime import date
 from json import loads as json_loads
 from json import dumps as json_dumps
@@ -22,11 +23,10 @@ def get_date() -> str:
 def write_file(products: list) -> None:
     with open('products.json', 'w+') as products_file:
         products_file.write(json_dumps(products, indent=4))
-
     return
 
 
-def get_page(url: str): # Return type ??
+def get_page(url: str) -> 'bs4.BeautifulSoup':
     request_headers = { "User-agent": 'Mozilla/5.0 (Windows NT 6.1; WOW64) App\
         leWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11' }
     try:
@@ -36,14 +36,12 @@ def get_page(url: str): # Return type ??
         )
     except:
         sys_exit(f'Unable to load the page: {url}')
-
     return page
 
 
 def get_products() -> list:
     with open('products.json', 'r') as products_file:
         products = json_loads(products_file.read())
-
     return products
 
 
@@ -74,7 +72,6 @@ def insert_product(url: str) -> None:
         }
     )
     write_file(products_list)
-
     return
 
 
@@ -114,8 +111,25 @@ def plot_prices() -> None:
     plt.legend()
     plt.tight_layout()
     plt.show()
-
     return
+
+
+def schedule_cronjob(every: int) -> None:
+    def check_existing_job(cron: 'crontab.CronTab') -> bool:
+        found = cron.find_command('price-traker')
+        for job in found:
+            if 'price-traker --update' in str(job):
+                return True
+        return False
+    cron = CronTab(user=True)
+    if not check_existing_job(cron):
+        job = cron.new(
+            command='~/code/price-traker/price-traker --update',
+            comment='Updates traked items prices'
+        )
+        job.hour.on(12)
+        cron.write()
+        return
 
 
 def update_prices() -> None:
@@ -139,7 +153,6 @@ def update_prices() -> None:
         )
         # sends notification if a product has lower price than last check
     write_file(products=products_list)
-
     return
 
 
@@ -157,6 +170,11 @@ argparser.add_argument(
     type=str,
     help='Insert new product to the traking list providing Amazon\'s pro\
         duct url'
+)
+argparser.add_argument(
+    '-s', '--schedule',
+    type=int,
+    help='Schedules autoupdates using cron'
 )
 # argparser.add_argument(
     # '-r', '--remove',
@@ -193,20 +211,10 @@ def main() -> None:
         plot_prices()
     if args.list:
         list_products()
+    if args.schedule is not None:
+        schedule_cronjob(every=args.schedule)
     return
 
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-    # infos = {
-        # 'url': URL,
-        # 'title': title,
-        # 'price_history': price
-    # }
-
-# title = page.find('span', id='productTitle').text.strip('\n')
