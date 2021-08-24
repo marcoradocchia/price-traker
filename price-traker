@@ -15,7 +15,7 @@ from sys import exit as sys_exit
 from os import system as os_system
 
 
-# UTILS --------------------------------------------------------------------- #
+# UTILS ---------------------------------------------------------------------- #
 def get_date() -> str:
     return f'{date.today().year}-{date.today().month}-{date.today().day}'
 
@@ -52,7 +52,7 @@ def send_notification(product, price):
     return
 
 
-# FEATURES ------------------------------------------------------------------ #
+# FEATURES ------------------------------------------------------------------- #
 def insert_product(url: str) -> None:
     if not url.startswith('https://www.amazon'):
         sys_exit('Error: Insert a valid Amazon url')
@@ -82,7 +82,6 @@ def list_products() -> None:
 
 
 def plot_prices() -> None:
-    # TODO
     plt.style.use('ggplot')
     plt.xlabel('Date')
     plt.ylabel('Price (€)')
@@ -111,6 +110,16 @@ def plot_prices() -> None:
     plt.legend()
     plt.tight_layout()
     plt.show()
+    return
+
+
+def remove_product(substr: str) -> None:
+    products_list = get_products()
+    for index, product in enumerate(products_list):
+        if substr.lower() in product["title"].lower():
+            if input(f'Are you sure you want to remove \'{product["title"]}\'? [Y/n]: ').lower() == 'y':
+                products_list.pop(index)
+                write_file(products_list)
     return
 
 
@@ -156,7 +165,7 @@ def update_prices() -> None:
     return
 
 
-# ARGUMENTS ----------------------------------------------------------------- #
+# ARGUMENTS ------------------------------------------------------------------ #
 argparser = argparse.ArgumentParser(
     description='Amazon prices traking tool',
 )
@@ -176,11 +185,11 @@ argparser.add_argument(
     type=int,
     help='Schedules autoupdates using cron'
 )
-# argparser.add_argument(
-    # '-r', '--remove',
-    # type=str,
-    # help='Remove product from the traking list'
-# )
+argparser.add_argument(
+    '-r', '--remove',
+    type=str,
+    help='Remove product from the traking list'
+)
 argparser.add_argument(
     '-p', '--plot',
     action='store_true',
@@ -202,10 +211,11 @@ args = argparser.parse_args()
 
 # MAIN ---------------------------------------------------------------------- #
 def main() -> None:
+    if args.remove is not None:
+        remove_product(args.remove)
     if args.insert is not None:
         insert_product(url=args.insert)
     if args.update:
-        print()
         update_prices()
     if args.plot:
         plot_prices()
