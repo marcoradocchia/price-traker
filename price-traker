@@ -125,7 +125,6 @@ Delta: {delta}€
 
 # FEATURES ------------------------------------------------------------------- #
 def insert_product(url: str, notification_mail_address: str) -> None:
-    #TODO check if product exists already in the products list
     products_list = get_products()
     for product in products_list:
         if product["url"] == url and product["notification_mail_address"]\
@@ -294,3 +293,8 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
+
+
+# TODO: make notification_mail_address in json a list so multiple mail
+# addresses can be notified about the same product
