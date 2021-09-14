@@ -3,65 +3,140 @@
 import argparse
 
 from bs4 import BeautifulSoup
+from configparser import ConfigParser
 from crontab import CronTab
 from datetime import date
+from email.message import EmailMessage
 from json import loads as json_loads
 from json import dumps as json_dumps
 from matplotlib import dates as mpl_dates
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MultipleLocator
 from requests import get
+from smtplib import SMTP_SSL
+from ssl import create_default_context
 from sys import exit as sys_exit
+from re import match
 from os import system as os_system
+from os.path import expanduser, isfile
 
+# GLOBAL VARIABLES ----------------------------------------------------------- #
+HOME = expanduser('~')
+USR_CONFIG_DIR = HOME + '/.config/price-traker'
+AMAZON_DOMAIN = 'https://www.amazon'
 
 # UTILS ---------------------------------------------------------------------- #
+def check_mail_address(mail: str) -> None:
+    if not match(r'^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$', mail):
+        sys_exit(f'ERROR: \"{mail}\" is not a valid mail address')
+    return
+
+def check_smtp_server(server_url: str) -> None:
+    if not match(r'^[A-Za-z0-9\.\+_-]+\.[a-zA-Z]*$', server_url):
+        sys_exit(f'ERROR: \"{server_url}\" is not a valid SMTP server URL')
+    return
+
+def check_url(url: str) -> None:
+    # if not match(r'https://^[A-Za-z0-9/\.\+_-]+\.[a-zA-Z]*$', url):
+        # sys_exit(f'ERROR: \"{url}\" is not a valid URL')
+    return
+
 def get_date() -> str:
     return f'{date.today().year}-{date.today().month}-{date.today().day}'
 
-
 def write_file(products: list) -> None:
-    with open('products.json', 'w+') as products_file:
+    with open(USR_CONFIG_DIR + '/products.json', 'w+') as products_file:
         products_file.write(json_dumps(products, indent=4))
     return
 
+def get_config() -> dict:
+    config_file = USR_CONFIG_DIR + '/config'
+    if not isfile(config_file): return # no config file found
+    config = ConfigParser()
+    config.read(config_file)
+    config_opts = {}
+    if 'mail' in config.sections():
+        smtp_server = config.get('mail', 'smtp_server')
+        check_smtp_server(smtp_server)
+        sender_mail_address = config.get('mail', 'sender_mail_address')
+        check_mail_address(sender_mail_address)
+        config_opts["mail"] = {}
+        config_opts["mail"]["smtp_server"] = smtp_server
+        config_opts["mail"]["port"] = config.get('mail', 'port')
+        config_opts["mail"]["sender_mail_address"] = sender_mail_address
+        config_opts["mail"]["sender_mail_psw"] = config.get(
+            'mail',
+            'sender_mail_psw'
+        )
+    return config_opts
 
 def get_page(url: str) -> 'bs4.BeautifulSoup':
     request_headers = { "User-agent": 'Mozilla/5.0 (Windows NT 6.1; WOW64) App\
         leWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11' }
     try:
-        page = BeautifulSoup(
-            get(url, headers=request_headers).text,
-            'lxml'
-        )
+        page = BeautifulSoup(get(url, headers=request_headers).text, 'lxml')
     except:
-        sys_exit(f'Unable to load the page: {url}')
+        sys_exit(f'ERROR: Unable to load the page \"{url}\"')
     return page
 
-
 def get_products() -> list:
-    with open('products.json', 'r') as products_file:
+    with open(USR_CONFIG_DIR + '/products.json', 'r') as products_file:
         products = json_loads(products_file.read())
     return products
 
 
-def send_notification(product, price):
-    # TODO add telegram, e-mail notification
-    os_system(f'notify-send -a "Price Traker" "{product}"\
-        "Current price: {price}"')
+# NOTIFICATIONS -------------------------------------------------------------- #
+def send_notification(product: dict) -> None:
+    product_url = product["url"]
+    product_title = product["title"]
+    product_current_price = product["prices"][-1]["price"]
+    product_previous_price = product["prices"][-2]["price"]
+    delta = round(product_current_price - product_previous_price, 2)
+    os_system(f'notify-send -a "Price Traker" "{product_title}"\
+        "Current price: {product_current_price}€\n\
+        Previous price: {product_previous_price}€\n\
+        Delta: {delta}€"')
+    config_opts = get_config()
+    print(config_opts)
+    if 'mail' in config_opts:
+        msg = EmailMessage()
+        msg["Subject"] = 'Price Traker Update'
+        msg["To"] = product["notification_mail_address"]
+        msg["From"] = config_opts["mail"]["sender_mail_address"]
+        msg.set_content(f"""\
+URL: {product_url}
+Product: {product_title}
+Current price: {product_current_price}€
+Previus price: {product_previous_price}€
+Delta: {delta}€
+""")
+        with SMTP_SSL(
+                config_opts["mail"]["smtp_server"],
+                config_opts["mail"]["port"],
+                context=create_default_context()
+            ) as server:
+            server.login(
+                config_opts["mail"]["sender_mail_address"],
+                config_opts["mail"]["sender_mail_psw"]
+            )
+            server.send_message(msg)
     return
 
 
 # FEATURES ------------------------------------------------------------------- #
-def insert_product(url: str) -> None:
-    if not url.startswith('https://www.amazon'):
-        sys_exit('Error: Insert a valid Amazon url')
-    page = get_page(url=url)
+def insert_product(url: str, notification_mail_address: str) -> None:
+    #TODO check if product exists already in the products list
     products_list = get_products()
+    for product in products_list:
+        if product["url"] == url and product["notification_mail_address"]\
+                == notification_mail_address:
+            sys_exit('WARNING: this URL is already in the traking list')
+    page = get_page(url=url)
     products_list.append(
         {
             "url": url,
             "title": page.find(id='productTitle').text.strip('\n'),
+            "notification_mail_address": notification_mail_address,
             "prices": [
                 {
                     "date": get_date(),
@@ -74,12 +149,10 @@ def insert_product(url: str) -> None:
     write_file(products_list)
     return
 
-
 def list_products() -> None:
     products_list = get_products()
     for index, product in enumerate(products_list):
         print(f'{index+1}. {product["title"]}')
-
 
 def plot_prices() -> None:
     plt.style.use('ggplot')
@@ -112,7 +185,6 @@ def plot_prices() -> None:
     plt.show()
     return
 
-
 def remove_product(substr: str) -> None:
     products_list = get_products()
     for index, product in enumerate(products_list):
@@ -121,7 +193,6 @@ def remove_product(substr: str) -> None:
                 products_list.pop(index)
                 write_file(products_list)
     return
-
 
 def schedule_cronjob(every: int) -> None:
     def check_existing_job(cron: 'crontab.CronTab') -> bool:
@@ -140,7 +211,6 @@ def schedule_cronjob(every: int) -> None:
         cron.write()
         return
 
-
 def update_prices() -> None:
     products_list = get_products()
     for product in products_list:
@@ -149,72 +219,68 @@ def update_prices() -> None:
         page = get_page(url=product["url"])
         current_price = float(page.find(id='priceblock_ourprice').text.\
             strip('\n')[:-1].replace(',', '.'))
-        if current_price < product["prices"][-1]["price"]:
-            send_notification(
-                product=product["title"],
-                price=current_price
-            )
-        product["prices"].append(
-            {
-                "date": get_date(),
-                "price": current_price
-            }
-        )
         # sends notification if a product has lower price than last check
+        if current_price < product["prices"][-1]["price"]:
+            send_notification(product)
+        product["prices"].append({ "date": get_date(), "price": current_price })
     write_file(products=products_list)
     return
 
-
-# ARGUMENTS ------------------------------------------------------------------ #
-argparser = argparse.ArgumentParser(
-    description='Amazon prices traking tool',
-)
-argparser.add_argument(
-    '-u', '--update',
-    action='store_true',
-    help='Updates prices for every product'
-)
-argparser.add_argument(
-    '-i', '--insert',
-    type=str,
-    help='Insert new product to the traking list providing Amazon\'s pro\
-        duct url'
-)
-argparser.add_argument(
-    '-s', '--schedule',
-    type=int,
-    help='Schedules autoupdates using cron'
-)
-argparser.add_argument(
-    '-r', '--remove',
-    type=str,
-    help='Remove product from the traking list'
-)
-argparser.add_argument(
-    '-p', '--plot',
-    action='store_true',
-    help='Updates prices for every product'
-)
-argparser.add_argument(
-    '-l', '--list',
-    action='store_true',
-    help='Lists all the traked products'
-)
-exclusives = argparser.add_mutually_exclusive_group()
-exclusives.add_argument(
-    '-q', '--quiet',
-    action='store_true',
-    help='No output shown'
-)
-args = argparser.parse_args()
-
-
 # MAIN ---------------------------------------------------------------------- #
 def main() -> None:
+    #TODO format usage
+    argparser = argparse.ArgumentParser(
+        description='Amazon prices traking tool',
+    )
+    argparser.add_argument(
+        '-u', '--update',
+        action='store_true',
+        help='Updates prices for every product'
+    )
+    argparser.add_argument(
+        '-i', '--insert',
+        type=str,
+        nargs=2,
+        help='Insert new product to the traking list providing Amazon\'s pro\
+            duct url'
+    )
+    argparser.add_argument(
+        '-s', '--schedule',
+        type=int,
+        help='Schedules autoupdates using cron'
+    )
+    argparser.add_argument(
+        '-r', '--remove',
+        type=str,
+        help='Remove product from the traking list'
+    )
+    argparser.add_argument(
+        '-p', '--plot',
+        action='store_true',
+        help='Updates prices for every product'
+    )
+    argparser.add_argument(
+        '-l', '--list',
+        action='store_true',
+        help='Lists all the traked products'
+    )
+    exclusives = argparser.add_mutually_exclusive_group()
+    exclusives.add_argument(
+        '-q', '--quiet',
+        action='store_true',
+        help='No output shown'
+    )
+    args = argparser.parse_args()
+
     if args.remove is not None:
         remove_product(args.remove)
     if args.insert is not None:
-        insert_product(url=args.insert)
+        check_url(args.insert[0])
+        check_mail_address(args.insert[1])
+        insert_product(
+            url=args.insert[0],
+            notification_mail_address=args.insert[1]
+        )
     if args.update:
         update_prices()
     if args.plot:
