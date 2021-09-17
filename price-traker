@@ -1,4 +1,4 @@
-#!/bin/python
+#!/usr/bin/python
 
 import argparse
 
@@ -15,9 +15,10 @@ from matplotlib.ticker import MultipleLocator
 from requests import get
 from smtplib import SMTP_SSL
 from ssl import create_default_context
+from sys import argv
 from sys import exit as sys_exit
-from re import match
-from os import system as os_system
+from re import match, IGNORECASE
+from re import compile as re_compile
 from os.path import expanduser, isfile
 
 # GLOBAL VARIABLES ----------------------------------------------------------- #
@@ -37,8 +38,17 @@ def check_smtp_server(server_url: str) -> None:
     return
 
 def check_url(url: str) -> None:
-    # if not match(r'https://^[A-Za-z0-9/\.\+_-]+\.[a-zA-Z]*$', url):
-        # sys_exit(f'ERROR: \"{url}\" is not a valid URL')
+    url_regex = re_compile(
+        r'^(?:http|ftp)s?://' # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|' #domain...
+        r'localhost|' #localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # ...or ip
+        r'(?::\d+)?' # optional port
+        r'(?:/?|[/?]\S+)$',
+        IGNORECASE
+    )
+    if not match(url_regex, url):
+        sys_exit(f'ERROR: \"{url}\" is not a valid URL')
     return
 
 def get_date() -> str:
@@ -86,30 +96,14 @@ def get_products() -> list:
 
 
 # NOTIFICATIONS -------------------------------------------------------------- #
-def send_notification(product: dict) -> None:
-    product_url = product["url"]
-    product_title = product["title"]
-    product_current_price = product["prices"][-1]["price"]
-    product_previous_price = product["prices"][-2]["price"]
-    delta = round(product_current_price - product_previous_price, 2)
-    os_system(f'notify-send -a "Price Traker" "{product_title}"\
-        "Current price: {product_current_price}€\n\
-        Previous price: {product_previous_price}€\n\
-        Delta: {delta}€"')
+def send_notification(notification_mail_address: dict, notification_msg_content: str) -> None:
     config_opts = get_config()
-    print(config_opts)
     if 'mail' in config_opts:
         msg = EmailMessage()
         msg["Subject"] = 'Price Traker Update'
-        msg["To"] = product["notification_mail_address"]
+        msg["To"] = notification_mail_address
         msg["From"] = config_opts["mail"]["sender_mail_address"]
-        msg.set_content(f"""\
-URL: {product_url}
-Product: {product_title}
-Current price: {product_current_price}€
-Previus price: {product_previous_price}€
-Delta: {delta}€
-""")
+        msg.set_content(notification_msg_content)
         with SMTP_SSL(
                 config_opts["mail"]["smtp_server"],
                 config_opts["mail"]["port"],
@@ -193,7 +187,7 @@ def remove_product(substr: str) -> None:
                 write_file(products_list)
     return
 
-def schedule_cronjob(every: int) -> None:
+def schedule_cronjob(hour: int) -> None:
     def check_existing_job(cron: 'crontab.CronTab') -> bool:
         found = cron.find_command('price-traker')
         for job in found:
@@ -203,34 +197,51 @@ def schedule_cronjob(every: int) -> None:
     cron = CronTab(user=True)
     if not check_existing_job(cron):
         job = cron.new(
-            command='~/code/price-traker/price-traker --update',
-            comment='Updates traked items prices'
+            command='/home/radocchia/code/python/price-traker/price-traker --update', #TODO change path here
+            comment='Updates price-traker items prices'
         )
-        job.hour.on(12)
+        # TODO correct cronjob
+        job.minute.on(00)
+        job.hour.on(hour)
         cron.write()
-        return
+    return
 
 def update_prices() -> None:
     products_list = get_products()
+    notification_msg_content = ""
     for product in products_list:
         # if the last price update is today, ignore updating for that product
         if product["prices"][-1]["date"] == get_date(): continue
         page = get_page(url=product["url"])
         current_price = float(page.find(id='priceblock_ourprice').text.\
             strip('\n')[:-1].replace(',', '.'))
+        current_date = get_date()
+        product["prices"].append({"date": current_date, "price": current_price})
+        previous_price = product["prices"][-2]["price"]
         # sends notification if a product has lower price than last check
-        if current_price < product["prices"][-1]["price"]:
-            send_notification(product)
-        product["prices"].append({ "date": get_date(), "price": current_price })
+        if current_price < previous_price:
+            delta = round(product_current_price - product_previous_price, 2)
+            notification_msg_content += """\
+URL: {product["url"]}
+Product: {product["title"]}
+Current price: {current_price}€ ({current_date})
+Previus price: {previous_price}€ ({product["prices"][-2]["date"]})
+Delta: {delta}€
+-----------------------------------------------------------------
+"""
+    if notification_msg_content != "":
+        send_notification(
+            product=product,
+            notification_msg_content=notification_msg_content
+        )
     write_file(products=products_list)
     return
 
 # MAIN ---------------------------------------------------------------------- #
 def main() -> None:
     #TODO format usage
-    argparser = argparse.ArgumentParser(
-        description='Amazon prices traking tool',
-    )
+    argparser = argparse.ArgumentParser()
+
     argparser.add_argument(
         '-u', '--update',
         action='store_true',
@@ -240,13 +251,13 @@ def main() -> None:
         '-i', '--insert',
         type=str,
         nargs=2,
-        help='Insert new product to the traking list providing Amazon\'s pro\
-            duct url'
+        help='Insert new product to the traking list given product URL and notification mail address'
     )
     argparser.add_argument(
         '-s', '--schedule',
         type=int,
-        help='Schedules autoupdates using cron'
+        nargs=1,
+        help='Autoupdate prices daily (cron) at specified hour of day (24h format)'
     )
     argparser.add_argument(
         '-r', '--remove',
@@ -261,14 +272,19 @@ def main() -> None:
     argparser.add_argument(
         '-l', '--list',
         action='store_true',
-        help='Lists all the traked products'
+        help='Lists all the tracked products'
     )
-    exclusives = argparser.add_mutually_exclusive_group()
-    exclusives.add_argument(
-        '-q', '--quiet',
-        action='store_true',
-        help='No output shown'
-    )
+    # exclusives = argparser.add_mutually_exclusive_group()
+    # exclusives.add_argument(
+        # '-q', '--quiet',
+        # action='store_true',
+        # help='No output shown'
+    # )
+
+    if len(argv) == 1: # If no argument is given print help and exit
+        argparser.print_help()
+        argparser.exit(status=0)
+
     args = argparser.parse_args()
 
     if args.remove is not None:
@@ -287,7 +303,10 @@ def main() -> None:
     if args.list:
         list_products()
     if args.schedule is not None:
-        schedule_cronjob(every=args.schedule)
+        hour = args.schedule[0]
+        if hour < 0 or hour > 23:
+            sys_exit('ERROR: please insert a valid argument; hour of day must be a number between 0 and 23')
+        schedule_cronjob(hour=hour)
     return
 
 
