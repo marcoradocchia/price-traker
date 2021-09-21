@@ -1,7 +1,6 @@
 #!/usr/bin/python
 
-import argparse
-
+from argparse import ArgumentParser
 from bs4 import BeautifulSoup
 from configparser import ConfigParser
 from crontab import CronTab
@@ -21,10 +20,8 @@ from re import match, IGNORECASE
 from re import compile as re_compile
 from os.path import expanduser, isfile
 
-# GLOBAL VARIABLES ----------------------------------------------------------- #
-HOME = expanduser('~')
-USR_CONFIG_DIR = HOME + '/.config/price-traker'
-AMAZON_DOMAIN = 'https://www.amazon'
+# CONSTANTS ------------------------------------------------------------------ #
+USR_CONFIG_DIR = expanduser('~') + '/.config/price-traker'
 
 # UTILS ---------------------------------------------------------------------- #
 def check_mail_address(mail: str) -> None:
@@ -89,6 +86,12 @@ def get_page(url: str) -> 'bs4.BeautifulSoup':
         sys_exit(f'ERROR: Unable to load the page \"{url}\"')
     return page
 
+def get_price(page: 'bs4.BeautifulSoup') -> float:
+    priceblock = page.find(id='priceblock_ourprice') # check for AMAZON standard price
+    if not priceblock:
+        priceblock = page.find(id='priceblock_dealprice') # if AMAZON standard price doesn't exists check for deal price
+    return float(priceblock.text.strip('\n')[:-1].replace(',', '.'))
+
 def get_products() -> list:
     with open(USR_CONFIG_DIR + '/products.json', 'r') as products_file:
         products = json_loads(products_file.read())
@@ -96,14 +99,14 @@ def get_products() -> list:
 
 
 # NOTIFICATIONS -------------------------------------------------------------- #
-def send_notification(notification_mail_address: dict, notification_msg_content: str) -> None:
+def send_notification(notification_mail_address: dict, notification_msg: str) -> None:
     config_opts = get_config()
     if 'mail' in config_opts:
         msg = EmailMessage()
         msg["Subject"] = 'Price Traker Update'
         msg["To"] = notification_mail_address
         msg["From"] = config_opts["mail"]["sender_mail_address"]
-        msg.set_content(notification_msg_content)
+        msg.set_content(notification_msg)
         with SMTP_SSL(
                 config_opts["mail"]["smtp_server"],
                 config_opts["mail"]["port"],
@@ -133,8 +136,7 @@ def insert_product(url: str, notification_mail_address: str) -> None:
             "prices": [
                 {
                     "date": get_date(),
-                    "price": float(page.find(id='priceblock_ourprice').text\
-                        .strip('\n')[:-1].replace(',', '.'))
+                    "price": get_price(page)
                 }
             ]
         }
@@ -145,7 +147,7 @@ def insert_product(url: str, notification_mail_address: str) -> None:
 def list_products() -> None:
     products_list = get_products()
     for index, product in enumerate(products_list):
-        print(f'{index+1}. {product["title"]}')
+        print(f'{index+1}. {product["title"]} -> {product["prices"][-1]["price"]}€ ({product["prices"][-1]["date"]}) {product["notification_mail_address"]}')
 
 def plot_prices() -> None:
     plt.style.use('ggplot')
@@ -171,7 +173,7 @@ def plot_prices() -> None:
     ax.yaxis.grid(True, 'minor')
     ax.yaxis.set_major_locator(MultipleLocator(10))
     ax.yaxis.set_minor_locator(MultipleLocator(5))
-    ax.xaxis.set_major_locator(mpl_dates.DayLocator(interval=1))
+    ax.xaxis.set_major_locator(mpl_dates.DayLocator(interval=1)) #TODO: when a lot of data is displayed there's overpopulation
     ax.xaxis.set_major_formatter(date_format)
     plt.legend()
     plt.tight_layout()
@@ -200,7 +202,6 @@ def schedule_cronjob(hour: int) -> None:
             command='/home/radocchia/code/python/price-traker/price-traker --update', #TODO change path here
             comment='Updates price-traker items prices'
         )
-        # TODO correct cronjob
         job.minute.on(00)
         job.hour.on(hour)
         cron.write()
@@ -208,31 +209,33 @@ def schedule_cronjob(hour: int) -> None:
 
 def update_prices() -> None:
     products_list = get_products()
-    notification_msg_content = ""
+    notification_mailing_list = {}
     for product in products_list:
         # if the last price update is today, ignore updating for that product
         if product["prices"][-1]["date"] == get_date(): continue
         page = get_page(url=product["url"])
-        current_price = float(page.find(id='priceblock_ourprice').text.\
-            strip('\n')[:-1].replace(',', '.'))
+        current_price = get_price(page)
         current_date = get_date()
         product["prices"].append({"date": current_date, "price": current_price})
         previous_price = product["prices"][-2]["price"]
+        notification_mail_address = product["notification_mail_address"]
         # sends notification if a product has lower price than last check
         if current_price < previous_price:
-            delta = round(product_current_price - product_previous_price, 2)
-            notification_msg_content += """\
+            if notification_mail_address not in notification_mailing_list:
+                notification_mailing_list[f"{notification_mail_address}"] = ""
+            delta = round(current_price - previous_price, 2)
+            notification_mailing_list[f"{notification_mail_address}"] += f"""\
 URL: {product["url"]}
 Product: {product["title"]}
-Current price: {current_price}€ ({current_date})
 Previus price: {previous_price}€ ({product["prices"][-2]["date"]})
+Current price: {current_price}€ ({current_date})
 Delta: {delta}€
------------------------------------------------------------------
+---
 """
-    if notification_msg_content != "":
+    for notification_mail_address in notification_mailing_list:
         send_notification(
-            product=product,
-            notification_msg_content=notification_msg_content
+            notification_mail_address=notification_mail_address,
+            notification_msg=notification_mailing_list[f"{notification_mail_address}"]
         )
     write_file(products=products_list)
     return
@@ -240,7 +243,7 @@ Delta: {delta}€
 # MAIN ---------------------------------------------------------------------- #
 def main() -> None:
     #TODO format usage
-    argparser = argparse.ArgumentParser()
+    argparser = ArgumentParser()
 
     argparser.add_argument(
         '-u', '--update',
@@ -274,12 +277,6 @@ def main() -> None:
         action='store_true',
         help='Lists all the tracked products'
     )
-    # exclusives = argparser.add_mutually_exclusive_group()
-    # exclusives.add_argument(
-        # '-q', '--quiet',
-        # action='store_true',
-        # help='No output shown'
-    # )
 
     if len(argv) == 1: # If no argument is given print help and exit
         argparser.print_help()
