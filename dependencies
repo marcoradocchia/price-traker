@@ -1,0 +1,4 @@
+[arch]
+python-beautifulsoup4
+python-lxml
+python-crontab (?)
