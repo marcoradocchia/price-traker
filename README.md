@@ -8,6 +8,7 @@ The tool has very minimal dependencies, considering that it uses Python's
 integrated libraries for most of the work:
 - `beautifulsoup4`;
 - `lxml` (as BeautifulSoup documentation recommends it for speed).
+
 Both can be installed via `pip install beautifulsoup4 lxml`.
 
 For **Arch Linux** users packages are available in the standard repos, hence
