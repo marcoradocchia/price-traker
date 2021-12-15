@@ -3,16 +3,13 @@
 from argparse import ArgumentParser
 from bs4 import BeautifulSoup
 from configparser import ConfigParser
-
-# from crontab import CronTab
 from datetime import date
 from email.message import EmailMessage
 from json import dumps as json_dumps
 from json import loads as json_loads
 from os import mkdir
 from os.path import expanduser, isdir, isfile, join
-from re import compile as re_compile
-from re import match, IGNORECASE
+from re import compile, match, IGNORECASE
 from requests import get
 from smtplib import SMTP_SSL
 from ssl import create_default_context
@@ -20,8 +17,8 @@ from sys import argv
 from sys import exit as sys_exit
 
 XDG_CONFIG = expanduser("~/.config/price-traker")
-CONFIG_FILE = join(XDG_CONFIG, "config")
 XDG_DATA = expanduser("~/.local/share/price-traker")
+CONFIG_FILE = join(XDG_CONFIG, "config")
 PRODUCT_LIST_FILE = join(XDG_DATA, "product_list.json")
 
 # UTILS
@@ -36,7 +33,7 @@ def check_smtp_server(server_url: str) -> None:
 
 
 def check_url(url: str) -> None:
-    url_regex = re_compile(
+    url_regex = compile(
         r"^(?:http|ftp)s?://"  # http:// or https://
         r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|"  # domain...
         r"localhost|"  # localhost...
@@ -96,8 +93,7 @@ def get_page(url: str) -> BeautifulSoup:
 
 
 def get_price(page: BeautifulSoup) -> float:
-    # check for AMAZON standard price
-    price = page.find(class_='a-offscreen')
+    price = page.find(class_='a-offscreen') # amazon price
     return float(price.text.strip('\n')[:-1].replace(',', '.'))
 
 
@@ -118,14 +114,14 @@ def get_list() -> list:
 
 
 # NOTIFICATIONS
-def send_notification(mail_addr: str, msg: str) -> None:
+def send_notification(mail_addr: str, mail_body: str) -> None:
     config_opts = get_config()
     if 'mail' in config_opts:
-        msg = EmailMessage()
-        msg['Subject'] = "Price Traker: lower price detected"
-        msg['To'] = mail_addr
-        msg['From'] = config_opts['mail']['notifier_addr']
-        msg.set_content(msg)
+        mail = EmailMessage()
+        mail['Subject'] = "Price Traker: lower price detected"
+        mail['To'] = mail_addr
+        mail['From'] = config_opts['mail']['notifier_addr']
+        mail.set_content(mail_body)
         with SMTP_SSL(
             config_opts['mail']['smtp_server'],
             config_opts['mail']['port'],
@@ -135,7 +131,7 @@ def send_notification(mail_addr: str, msg: str) -> None:
                 config_opts['mail']['notifier_addr'],
                 config_opts['mail']['notifier_psw'],
             )
-            server.send_message(msg)
+            server.send_message(mail)
 
 
 # FEATURES
@@ -196,26 +192,6 @@ def remove_product(substr: str) -> None:
                 write_list(products=product_list)
 
 
-# def schedule_cronjob(hour: int) -> None:
-#     def check_existing_job(cron: 'crontab.CronTab') -> bool:
-#         found = cron.find_command('price-traker')
-#         for job in found:
-#             if 'price-traker --update' in str(job):
-#                 return True
-#         return False
-
-#     cron = CronTab(user=True)
-#     if not check_existing_job(cron):
-#         job = cron.new(
-#             # TODO change path here
-#             command="/home/radocchia/code/python/price-traker/price-traker --update",
-#             comment="Updates price-traker items prices",
-#         )
-#         job.minute.on(00)
-#         job.hour.on(hour)
-#         cron.write()
-
-
 def update_prices() -> None:
     product_list = get_list()
     today = get_date()
@@ -247,13 +223,12 @@ def update_prices() -> None:
         # add followers to notification_queue
         if price_delta < 0:
             notification_body = (
-               f"URL: {product['url']}\n"
-               f"Product: {product['title']}\n"
-               f"Previus price: {prev_price}€ "
-               f"({product['prices'][-2]['date']})\n"
-               f"Current price: {today_price}€ ({today})"
-               f"Delta: {price_delta}€\n"
-               "---\n"
+                f"{product['title'][:50]}...\n"
+                f"├── url: {product['url']}\n"
+                f"├── previous price: {prev_price}€ "
+                f"({product['prices'][-2]['date']})\n"
+                f"├── current price: {today_price}€ ({today})\n"
+                f"└── delta: {price_delta}€\n"
             )
             # for each follower of the product, append the notification_body
             # if it already exists in the notification_queue,
@@ -264,12 +239,12 @@ def update_prices() -> None:
                 else:
                     notification_queue[follower] = notification_body
     # write updated product_list to PRODUCT_LIST_FILE
-    write_list(products=product_list)
+    # write_list(products=product_list) # TODO uncomment this
     # mail
     for mail_addr in notification_queue:
         send_notification(
             mail_addr=mail_addr,
-            msg=notification_queue[mail_addr],
+            mail_body=notification_queue[mail_addr],
         )
 
 
@@ -281,33 +256,27 @@ def main() -> None:
         '-u',
         '--update',
         action='store_true',
-        help='Updates prices for every product'
+        help='update prices for every product'
     )
     argparser.add_argument(
         '-i',
         '--insert',
         type=str,
         nargs=2,
-        help='Insert new product to the traking list given product URL and notification mail address',
+        help='insert new product to the traking list given product \
+            URL and notification mail address',
     )
-    # argparser.add_argument(
-    #     '-s',
-    #     '--schedule',
-    #     type=int,
-    #     nargs=1,
-    #     help='Autoupdate prices daily (cron) at specified hour of day (24h format)',
-    # )
     argparser.add_argument(
         '-r',
         '--remove',
         type=str,
-        help='Remove product from the traking list'
+        help='remove product from the traking list'
     )
     argparser.add_argument(
         '-l',
         '--list',
         action='store_true',
-        help='List all the tracked products'
+        help='list all the tracked products'
     )
 
     if len(argv) == 1:  # If no argument is given print help and exit
@@ -326,14 +295,6 @@ def main() -> None:
         update_prices()
     if args.list:
         list_products()
-    # if args.schedule is not None:
-    #     hour = args.schedule[0]
-    #     if hour < 0 or hour > 23:
-    #         sys_exit(
-    #             "ERROR: please insert a valid argument; hour of day must\
-    #                 be a number between 0 and 23"
-    #         )
-    #     schedule_cronjob(hour=hour)
 
 
 if __name__ == '__main__':
