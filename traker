@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 
+import logging
 from argparse import ArgumentParser
 from bs4 import BeautifulSoup
 from configparser import ConfigParser
 from datetime import date
 from email.message import EmailMessage
+from fake_useragent import UserAgent
 from json import dumps as json_dumps
 from json import loads as json_loads
-from os import mkdir
+from os import listdir,mkdir, rename
 from os.path import expanduser, isdir, isfile, join
 from re import compile, match, IGNORECASE
 from requests import get
@@ -15,20 +17,28 @@ from smtplib import SMTP_SSL
 from ssl import create_default_context
 from sys import argv
 from sys import exit as sys_exit
+from time import sleep
+
 
 XDG_CONFIG = expanduser("~/.config/price-traker")
 XDG_DATA = expanduser("~/.local/share/price-traker")
 CONFIG_FILE = join(XDG_CONFIG, "config")
 PRODUCT_LIST_FILE = join(XDG_DATA, "product_list.json")
+LOG_FILE = join(XDG_DATA, "traker.log")
+LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
+USERAGENT_FALLBACK = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11\
+    (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11"
 
 # UTILS
 def check_mail_addr(mail: str) -> None:
     if not match(r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$", mail):
+        logging.error(f"'{mail}' is not a valid mail address")
         sys_exit(f"ERROR: '{mail}' is not a valid mail address")
 
 
 def check_smtp_server(server_url: str) -> None:
     if not match(r"^[A-Za-z0-9\.\+_-]+\.[a-zA-Z]*$", server_url):
+        logging.error(f"{server_url} is not a valid SMTP server URL")
         sys_exit(f"ERROR: '{server_url}' is not a valid SMTP server URL")
 
 
@@ -43,6 +53,7 @@ def check_url(url: str) -> None:
         IGNORECASE,
     )
     if not match(url_regex, url):
+        logging.error(f"'{url}' is not a valid URL")
         sys_exit(f"ERROR: '{url}' is not a valid URL")
 
 
@@ -58,6 +69,7 @@ def write_list(products: list) -> None:
 def get_config() -> dict:
     # check for configuration file, if not found then exit
     if not isfile(CONFIG_FILE):
+        logging.error("configuration file not found")
         sys_exit(
             "ERROR: Configuration file not found."
             f"please create configuration file at {CONFIG_FILE}"
@@ -81,20 +93,55 @@ def get_config() -> dict:
 
 
 def get_page(url: str) -> BeautifulSoup:
-    request_headers = {
-        'User-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) App\
-        leWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11'
-    }
+    """
+    Update UserAgent's cache monthly:
+    look for ~/.local/share/useragents_<month>.json: if exists and <month>
+    correspond to current month then use that cache, otherwhise rename file
+    to current month and upadte UserAgent cache
+    """
+    # fake useragent for anonimity
+    xdg_data_files = listdir(XDG_DATA)
+    need_cache_update = True
+    useragents_file = join(
+        XDG_DATA,
+        'useragents_' + str(date.today().month) + '.json'
+    )
+    for file in xdg_data_files:
+        if "useragents" in file:
+            if int(file.split('.json')[0][-2:]) == date.today().month:
+                need_cache_update = False
+            else:
+                rename(join(XDG_DATA, file), useragents_file)
+            break
+    # TODO: need to get random useragent and random proxy for anonimity and to
+    # avoid sites from blocking page requests
+    ua = UserAgent(
+        fallback=USERAGENT_FALLBACK,
+        path=useragents_file
+    )
+    # update user agent cache every month
+    if need_cache_update:
+        ua.update()
+        logging.warning("updated UserAgent cache")
+
+    # use random user agent to prevent request blocking
+    request_headers = {'User-agent': ua.random}
     try:
         page = BeautifulSoup(get(url, headers=request_headers).text, 'lxml')
-    except:
-        sys_exit(f"ERROR: Unable to load the page '{url}'")
+    except Exception as e:
+        logging.error(f"unable to load page '{url}' ({e})")
+        sys_exit(f"ERROR: unable to load page '{url}'")
     return page
 
 
 def get_price(page: BeautifulSoup) -> float:
-    price = page.find(class_='a-offscreen') # amazon price
-    return float(price.text.strip('\n')[:-1].replace(',', '.'))
+    try:
+        price = page.find(class_='a-offscreen') # this is for amazon only atm
+        price = float(price.text.strip('\n')[:-1].replace(',', '.'))
+        return price
+    except Exception as e:
+        logging.error(f"unable to retrieve price information in page ({e})")
+        sys_exit(f"ERROR: unable to retrieve price information in page")
 
 
 def get_list() -> list:
@@ -104,13 +151,15 @@ def get_list() -> list:
         if not isdir(XDG_DATA):
             try:
                 mkdir(XDG_DATA)
-            except:
+            except Exception as e:
+                logging.error(f"unable to create directory {XDG_DATA} ({e})")
                 sys_exit(f"ERROR: unable to create directory {XDG_DATA}")
         write_list(products=[])
         return [] # if file didn't exist, no need to read it
     with open(PRODUCT_LIST_FILE, 'r') as products_file:
         product_list = json_loads(products_file.read())
     return product_list
+
 
 
 # NOTIFICATIONS
@@ -122,43 +171,65 @@ def send_notification(mail_addr: str, mail_body: str) -> None:
         mail['To'] = mail_addr
         mail['From'] = config_opts['mail']['notifier_addr']
         mail.set_content(mail_body)
-        with SMTP_SSL(
-            config_opts['mail']['smtp_server'],
-            config_opts['mail']['port'],
-            context=create_default_context(),
-        ) as server:
-            server.login(
-                config_opts['mail']['notifier_addr'],
-                config_opts['mail']['notifier_psw'],
+        try:
+            with SMTP_SSL(
+                config_opts['mail']['smtp_server'],
+                config_opts['mail']['port'],
+                context=create_default_context(),
+            ) as server:
+                server.login(
+                    config_opts['mail']['notifier_addr'],
+                    config_opts['mail']['notifier_psw'],
+                )
+                server.send_message(mail)
+                logging.info(f"mail notification sent to {mail_addr}")
+        except Exception as e:
+            logging.error(
+                "unable to send mail notification "
+                f"to '{mail_addr}' ({e})"
             )
-            server.send_message(mail)
+            print(f"unable to send mail notification to '{mail_addr}'")
 
 
 # FEATURES
 def insert_product(url: str, mail_addr: str) -> None:
+    # check for valid url and mail address before continuing
+    check_url(url)
+    check_mail_addr(mail_addr)
     product_list = get_list()
     # look for product in product_list
     for product in product_list:
         if (product['url'] == url):
             if mail_addr in product['followers']:
-                # if mail_addr already in followers array, exit
-                sys_exit(
-                    f"WARNING: '{mail_addr}' already tracking "
-                    f"'{product['title'][:50]}...'.\n"
-                    f"No further actions needed."
+                warning_msg = (
+                    f"'{mail_addr}' already tracking "
+                    f"'{product['url']}...'"
                 )
+                logging.warning(warning_msg)
+                # if mail_addr already in followers array, exit
+                sys_exit( f"WARNING: {warning_msg}")
             else:
                 # product already in product_list but mail_addr not in followers
                 # add mail_addr to followers and exit
                 product['followers'].append(mail_addr)
+                logging.info(
+                    f"'{mail_addr}' started tracking "
+                    f"'{product['title']}' "
+                    f"({pruduct['url']})"
+                )
                 write_list(products=product_list)
                 return
     # if product not found in product_list, add new entry to product_list
     page = get_page(url=url)
+    try:
+        title = page.find(id='productTitle').text.strip(' \n') # TODO amazon only atm
+    except Exception as e:
+        logging.error(f"no id found at given url page ({e})")
+        sys_exit(f"ERROR: no id found at given url page")
     product_list.append(
         {
             'url': url,
-            'title': page.find(id='productTitle').text.strip(' \n'),
+            'title': title,
             'followers': [mail_addr],
             'prices': [
                 {
@@ -167,6 +238,11 @@ def insert_product(url: str, mail_addr: str) -> None:
                 }
             ],
         }
+    )
+    logging.info(
+        f"'{mail_addr}' started tracking "
+        f"'{title}' "
+        f"({url})"
     )
     # write updated product_list to PRODUCT_LIST_FILE
     write_list(products=product_list)
@@ -183,13 +259,28 @@ def list_products() -> None:
         )
 
 
-def remove_product(substr: str) -> None:
+def remove_product(substr: str, mail_addr: str) -> None:
+    # check for valid mail address before continuing
+    check_mail_addr(mail_addr)
     product_list = get_list()
-    for index, product in enumerate(product_list):
+    for product in product_list:
         if substr.lower() in product['title'].lower():
-            if input(f"Remove '{product['title']}'? [y/N]: ").lower() == 'y':
-                product_list.pop(index)
+            if mail_addr not in product['followers']:
+                return
+            if input(
+                    f"Remove '{mail_addr}' from "
+                    f"'{product['title']}' followers list? [y/N]: "
+                ).lower() == 'y':
+                product['followers'].remove(mail_addr)
                 write_list(products=product_list)
+                logging.info(
+                    f"'{mail_addr}' stopped tracking "
+                    f"'{product['title']}' "
+                    f"({product['url']})"
+                )
+        else:
+            logging.warning(f"no tracked product matching query '{substr}'")
+            sys_exit(f"WARNING: no tracked product matching query '{substr}'")
 
 
 def update_prices() -> None:
@@ -197,7 +288,8 @@ def update_prices() -> None:
     today = get_date()
     # exit on empty product_list
     if len(product_list) == 0:
-        sys_exit("WARNING: no products are being tracked.")
+        logging.warning("update request with empty product list")
+        sys_exit("WARNING: no products tracking list")
     # notification_queue object structure:
     # {
     #   'mail_addr1': 'mail_body1',
@@ -238,8 +330,9 @@ def update_prices() -> None:
                     notification_queue[follower] += notification_body
                 else:
                     notification_queue[follower] = notification_body
+        sleep(2)
     # write updated product_list to PRODUCT_LIST_FILE
-    # write_list(products=product_list) # TODO uncomment this
+    write_list(products=product_list)
     # mail
     for mail_addr in notification_queue:
         send_notification(
@@ -250,33 +343,46 @@ def update_prices() -> None:
 
 # MAIN
 def main() -> None:
-    # TODO format usage
-    argparser = ArgumentParser()
-    argparser.add_argument(
-        '-u',
-        '--update',
-        action='store_true',
-        help='update prices for every product'
+    # configuring logging
+    logging.basicConfig(
+        filename=LOG_FILE,
+        encoding='utf-8',
+        format=LOG_FORMAT,
+        datefmt='%Y-%m-%d [%H:%M:%S]',
+        level=20, # INFO level
     )
+
+    # TODO format usage
+    argparser = ArgumentParser(allow_abbrev=False)
     argparser.add_argument(
-        '-i',
-        '--insert',
+        '-i', '--insert',
         type=str,
         nargs=2,
-        help='insert new product to the traking list given product \
-            URL and notification mail address',
+        metavar=('<url>', '<mail>'),
+        help= (
+            '<mail> starts tracking <url> '
+            '(requires valid mail option for noticitation purposes)'
+        )
     )
     argparser.add_argument(
-        '-r',
-        '--remove',
-        type=str,
-        help='remove product from the traking list'
-    )
-    argparser.add_argument(
-        '-l',
-        '--list',
+        '-l', '--list',
         action='store_true',
         help='list all the tracked products'
+    )
+    argparser.add_argument(
+        '-r', '--remove',
+        type=str,
+        nargs=2,
+        metavar=('<title_substr>', '<mail>'),
+        help= (
+            '<mail> stops tracking <title_substr> '
+            '(<title_substr> indicates a substring of the product title)'
+        )
+    )
+    argparser.add_argument(
+        '-u', '--update',
+        action='store_true',
+        help='update prices for every product'
     )
 
     if len(argv) == 1:  # If no argument is given print help and exit
@@ -286,10 +392,8 @@ def main() -> None:
     args = argparser.parse_args()
 
     if args.remove is not None:
-        remove_product(args.remove)
+        remove_product(args.remove[0], args.remove[1])
     if args.insert is not None:
-        check_url(args.insert[0])
-        check_mail_addr(args.insert[1])
         insert_product(url=args.insert[0], mail_addr=args.insert[1])
     if args.update:
         update_prices()
