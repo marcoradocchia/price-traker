@@ -57,15 +57,6 @@ def check_url(url: str) -> None:
         sys_exit(f"ERROR: '{url}' is not a valid URL")
 
 
-def get_date() -> str:
-    return f"{date.today().year}-{date.today().month}-{date.today().day}"
-
-
-def write_list(products: list) -> None:
-    with open(PRODUCT_LIST_FILE, 'w+') as products_file:
-        products_file.write(json_dumps(products, indent=4))
-
-
 def get_config() -> dict:
     # check for configuration file, if not found then exit
     if not isfile(CONFIG_FILE):
@@ -92,40 +83,13 @@ def get_config() -> dict:
     return config_opts
 
 
-def get_page(url: str) -> BeautifulSoup:
-    """
-    Update UserAgent's cache monthly:
-    look for ~/.local/share/useragents_<month>.json: if exists and <month>
-    correspond to current month then use that cache, otherwhise rename file
-    to current month and upadte UserAgent cache
-    """
-    # fake useragent for anonimity
-    xdg_data_files = listdir(XDG_DATA)
-    need_cache_update = True
-    useragents_file = join(
-        XDG_DATA,
-        'useragents_' + str(date.today().month) + '.json'
-    )
-    for file in xdg_data_files:
-        if "useragents" in file:
-            if int(file.split('.json')[0][-2:]) == date.today().month:
-                need_cache_update = False
-            else:
-                rename(join(XDG_DATA, file), useragents_file)
-            break
-    # TODO: need to get random useragent and random proxy for anonimity and to
-    # avoid sites from blocking page requests
-    ua = UserAgent(
-        fallback=USERAGENT_FALLBACK,
-        path=useragents_file
-    )
-    # update user agent cache every month
-    if need_cache_update:
-        ua.update()
-        logging.warning("updated UserAgent cache")
+def get_date() -> str:
+    return f"{date.today().year}-{date.today().month}-{date.today().day}"
 
+
+def get_page(url: str) -> BeautifulSoup:
     # use random user agent to prevent request blocking
-    request_headers = {'User-agent': ua.random}
+    request_headers = {'User-agent': get_useragent()}
     try:
         page = BeautifulSoup(get(url, headers=request_headers).text, 'lxml')
     except Exception as e:
@@ -144,6 +108,45 @@ def get_price(page: BeautifulSoup) -> float:
         sys_exit(f"ERROR: unable to retrieve price information in page")
 
 
+def get_useragent() -> str:
+    """
+    Return random useragent string using fake_useragent library for anonimity
+    and to prevent blocked requests.
+    Update UserAgent's cache monthly:
+    look for ~/.local/share/useragents_<month>.json: if exists and <month>
+    correspond to current month then use that cache, otherwhise rename file
+    to current month and upadte UserAgent cache.
+    """
+    xdg_data_files = listdir(XDG_DATA)
+    need_cache_update = True
+    useragents_file = join(
+        XDG_DATA,
+        'useragents_' + str(date.today().month) + '.json'
+    )
+    for file in xdg_data_files:
+        if "useragents" in file:
+            if int(file.split('.json')[0][-2:]) == date.today().month:
+                need_cache_update = False
+            else:
+                rename(join(XDG_DATA, file), useragents_file)
+            break
+    ua = UserAgent(
+        fallback=USERAGENT_FALLBACK,
+        path=useragents_file
+    )
+    # update user agent cache every month
+    if need_cache_update:
+        ua.update()
+        logging.warning("updated UserAgent cache")
+    return ua.random
+
+
+# FILE READING/WRITING
+def write_list(products: list) -> None:
+    with open(PRODUCT_LIST_FILE, 'w+') as products_file:
+        products_file.write(json_dumps(products, indent=4))
+
+
 def get_list() -> list:
     # check for data file
     if not isfile(PRODUCT_LIST_FILE):
@@ -159,7 +162,6 @@ def get_list() -> list:
     with open(PRODUCT_LIST_FILE, 'r') as products_file:
         product_list = json_loads(products_file.read())
     return product_list
-
 
 
 # NOTIFICATIONS
