@@ -1,4 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+# coding=utf-8
 
 import logging
 from argparse import ArgumentParser
@@ -89,9 +90,14 @@ def get_date() -> str:
 
 def get_page(url: str) -> BeautifulSoup:
     # use random user agent to prevent request blocking
-    request_headers = {'User-agent': get_useragent()}
     try:
-        page = BeautifulSoup(get(url, headers=request_headers).text, 'lxml')
+        page = BeautifulSoup(
+            get(
+                url=url,
+                headers={'User-Agent': get_useragent()}
+            ).text,
+            'lxml'
+        )
     except Exception as e:
         logging.error(f"unable to load page '{url}' ({e})")
         sys_exit(f"ERROR: unable to load page '{url}'")
