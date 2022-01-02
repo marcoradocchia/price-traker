@@ -18,7 +18,7 @@ from smtplib import SMTP_SSL
 from ssl import create_default_context
 from sys import argv
 from sys import exit as sys_exit
-from time import sleep
+from utils.text import wrap
 
 
 XDG_CONFIG = expanduser("~/.config/price-traker")
@@ -29,6 +29,7 @@ LOG_FILE = join(XDG_DATA, "traker.log")
 LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
 USERAGENT_FALLBACK = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11\
     (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11"
+TIMEOUT = 5
 
 # UTILS
 def check_mail_addr(mail: str) -> None:
@@ -84,17 +85,45 @@ def get_config() -> dict:
     return config_opts
 
 
+def get_proxy_list() -> list:
+    try:
+        response = get(
+            'https://free-proxy-list.net/',
+            headers={'User-Agent': get_useragent()},
+        )
+        soup = BeautifulSoup(response.content, 'lxml')
+        table = soup.find('tbody')
+        proxies = []
+        for row in table:
+            if row.find_all('td')[4].text =='elite proxy':
+                proxy = ':'.join(
+                    [row.find_all('td')[0].text,
+                    row.find_all('td')[1].text]
+                )
+                proxies.append(proxy)
+        return proxies
+    except Exception as e:
+        logging.error(f"unable to get proxy list ({e})")
+        sys_exit(f"ERROR: unable to get proxy list")
+
+
 def get_date() -> str:
     return f"{date.today().year}-{date.today().month}-{date.today().day}"
 
 
 def get_page(url: str) -> BeautifulSoup:
-    # use random user agent to prevent request blocking
+    # use random user agent and rotating proxies to prevent request blocking
+    proxy = get_working_proxy()
     try:
         page = BeautifulSoup(
             get(
                 url=url,
-                headers={'User-Agent': get_useragent()}
+                headers={'User-Agent': get_useragent()},
+                proxies={
+                    'http': f'http://{proxy}',
+                    'https': f'http://{proxy}',
+                },
+                timeout=TIMEOUT,
             ).text,
             'lxml'
         )
@@ -113,6 +142,26 @@ def get_price(page: BeautifulSoup) -> float:
         logging.error(f"unable to retrieve price information in page ({e})")
         sys_exit(f"ERROR: unable to retrieve price information in page")
 
+
+def get_working_proxy(proxy_list: list) -> str:
+    while len(proxy_list) > 0:
+        proxy = proxy_list.pop()
+        proxy_ip = proxy.split(':')[0]
+        try:
+            response = get(
+                url='https://httpbin.org/ip',
+                proxies={
+                    'http': f'http://{proxy}',
+                    'https': f'http://{proxy}',
+                },
+                timeout=TIMEOUT,
+            ).json()
+            if response['origin'] == proxy_ip:
+                return proxy
+        except:
+            pass
+    logging.error("unable to find working proxy")
+    sys_exit("ERROR: unable to find working proxy")
 
 def get_useragent() -> str:
     """
@@ -223,7 +272,7 @@ def insert_product(url: str, mail_addr: str) -> None:
                 logging.info(
                     f"'{mail_addr}' started tracking "
                     f"'{product['title']}' "
-                    f"({pruduct['url']})"
+                    f"({product['url']})"
                 )
                 write_list(products=product_list)
                 return
@@ -260,11 +309,11 @@ def list_products() -> None:
     product_list = get_list()
     for product in product_list:
         print(
-            f"{product['title'][:50]}...\n"
-            f"├── {product['prices'][-1]['price']}€\n"
-            f"├── {product['prices'][-1]['date']}\n"
-            f"└── {', '.join(product['followers'])}\n"
-        )
+            f"├─ {wrap(input=product['title'])}\n"
+            f"│  ├── {product['prices'][-1]['price']}€\n"
+            f"│  ├── {product['prices'][-1]['date']}\n"
+            f"│  └── {wrap(input=', '.join(product['followers']), prefix_length=7)}\n"
+        ) 
 
 
 def remove_product(substr: str, mail_addr: str) -> None:
@@ -323,12 +372,12 @@ def update_prices() -> None:
         # add followers to notification_queue
         if price_delta < 0:
             notification_body = (
-                f"{product['title'][:50]}...\n"
-                f"├── url: {product['url']}\n"
-                f"├── previous price: {prev_price}€ "
+                f"├─ {wrap(input=product['title'], prefix_length=3)}\n"
+                f"│   ├── url: {wrap(input=product['url'], prefix_length=13)}\n"
+                f"│   ├── previous price: {prev_price}€ "
                 f"({product['prices'][-2]['date']})\n"
-                f"├── current price: {today_price}€ ({today})\n"
-                f"└── delta: {price_delta}€\n"
+                f"│   ├── current price: {today_price}€ ({today})\n"
+                f"│   └── delta: {price_delta}€\n"
             )
             # for each follower of the product, append the notification_body
             # if it already exists in the notification_queue,
@@ -338,7 +387,6 @@ def update_prices() -> None:
                     notification_queue[follower] += notification_body
                 else:
                     notification_queue[follower] = notification_body
-        sleep(2)
     # write updated product_list to PRODUCT_LIST_FILE
     write_list(products=product_list)
     # mail
