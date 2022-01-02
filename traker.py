@@ -18,7 +18,6 @@ from smtplib import SMTP_SSL
 from ssl import create_default_context
 from sys import argv
 from sys import exit as sys_exit
-from utils.text import wrap
 
 
 XDG_CONFIG = expanduser("~/.config/price-traker")
@@ -86,6 +85,7 @@ def get_config() -> dict:
 
 
 def get_proxy_list() -> list:
+    print('Retrieving proxy list...')
     try:
         response = get(
             'https://free-proxy-list.net/',
@@ -113,20 +113,19 @@ def get_date() -> str:
 
 def get_page(url: str) -> BeautifulSoup:
     # use random user agent and rotating proxies to prevent request blocking
-    proxy = get_working_proxy()
+    proxy = get_working_proxy(proxy_list=get_proxy_list())
+    print('Contacting server...')
     try:
-        page = BeautifulSoup(
-            get(
-                url=url,
-                headers={'User-Agent': get_useragent()},
-                proxies={
-                    'http': f'http://{proxy}',
-                    'https': f'http://{proxy}',
-                },
-                timeout=TIMEOUT,
-            ).text,
-            'lxml'
-        )
+        page = get(
+            url=url,
+            headers={'User-Agent': get_useragent()},
+            proxies={
+                'http': f'http://{proxy}',
+                'https': f'http://{proxy}',
+            },
+            timeout=60,
+        ).text
+        page = BeautifulSoup(page, 'lxml')
     except Exception as e:
         logging.error(f"unable to load page '{url}' ({e})")
         sys_exit(f"ERROR: unable to load page '{url}'")
@@ -144,6 +143,7 @@ def get_price(page: BeautifulSoup) -> float:
 
 
 def get_working_proxy(proxy_list: list) -> str:
+    print('Looking for working proxy...')
     while len(proxy_list) > 0:
         proxy = proxy_list.pop()
         proxy_ip = proxy.split(':')[0]
@@ -157,6 +157,8 @@ def get_working_proxy(proxy_list: list) -> str:
                 timeout=TIMEOUT,
             ).json()
             if response['origin'] == proxy_ip:
+                logging.info(f"using proxy {proxy_ip}")
+                print(f"Using proxy {proxy_ip}")
                 return proxy
         except:
             pass
@@ -180,7 +182,7 @@ def get_useragent() -> str:
     )
     for file in xdg_data_files:
         if "useragents" in file:
-            if int(file.split('.json')[0][-2:]) == date.today().month:
+            if int(file.split('.json')[0].split('_')[1]) == date.today().month:
                 need_cache_update = False
             else:
                 rename(join(XDG_DATA, file), useragents_file)
@@ -197,6 +199,16 @@ def get_useragent() -> str:
 
 
 # FILE READING/WRITING
+def check_data_dir() -> None:
+    # check for data directory, if doesn't exist try to create one
+    if not isdir(XDG_DATA):
+        try:
+            mkdir(XDG_DATA)
+        except Exception as e:
+            logging.error(f"unable to create directory {XDG_DATA} ({e})")
+            sys_exit(f"ERROR: unable to create directory {XDG_DATA}")
+
+
 def write_list(products: list) -> None:
     with open(PRODUCT_LIST_FILE, 'w+') as products_file:
         products_file.write(json_dumps(products, indent=4))
@@ -205,13 +217,7 @@ def write_list(products: list) -> None:
 def get_list() -> list:
     # check for data file
     if not isfile(PRODUCT_LIST_FILE):
-        # check for data directory, if doesn't exist try to create one
-        if not isdir(XDG_DATA):
-            try:
-                mkdir(XDG_DATA)
-            except Exception as e:
-                logging.error(f"unable to create directory {XDG_DATA} ({e})")
-                sys_exit(f"ERROR: unable to create directory {XDG_DATA}")
+        check_data_dir()
         write_list(products=[])
         return [] # if file didn't exist, no need to read it
     with open(PRODUCT_LIST_FILE, 'r') as products_file:
@@ -221,6 +227,7 @@ def get_list() -> list:
 
 # NOTIFICATIONS
 def send_notification(mail_addr: str, mail_body: str) -> None:
+    print(f'Sending mail notification to {mail_addr}')
     config_opts = get_config()
     if 'mail' in config_opts:
         mail = EmailMessage()
@@ -303,16 +310,17 @@ def insert_product(url: str, mail_addr: str) -> None:
     )
     # write updated product_list to PRODUCT_LIST_FILE
     write_list(products=product_list)
+    print('Done')
 
 
 def list_products() -> None:
     product_list = get_list()
     for product in product_list:
         print(
-            f"├─ {wrap(input=product['title'])}\n"
+            f"├─ {product['title'][:50]}...\n"
             f"│  ├── {product['prices'][-1]['price']}€\n"
             f"│  ├── {product['prices'][-1]['date']}\n"
-            f"│  └── {wrap(input=', '.join(product['followers']), prefix_length=7)}\n"
+            f"│  └── {', '.join(product['followers'])}"
         ) 
 
 
@@ -372,8 +380,8 @@ def update_prices() -> None:
         # add followers to notification_queue
         if price_delta < 0:
             notification_body = (
-                f"├─ {wrap(input=product['title'], prefix_length=3)}\n"
-                f"│   ├── url: {wrap(input=product['url'], prefix_length=13)}\n"
+                f"├─ {product['title']}\n"
+                f"│   ├── url: {product['url']}\n"
                 f"│   ├── previous price: {prev_price}€ "
                 f"({product['prices'][-2]['date']})\n"
                 f"│   ├── current price: {today_price}€ ({today})\n"
@@ -395,10 +403,16 @@ def update_prices() -> None:
             mail_addr=mail_addr,
             mail_body=notification_queue[mail_addr],
         )
+    print('Done')
 
 
 # MAIN
 def main() -> None:
+    # if log file doesn't exist, create it
+    if not isfile(LOG_FILE):
+        check_data_dir() # check if data directory exists
+        with open(LOG_FILE, 'w+') as logfile:
+            logfile.writelines(['-- PRICE TRAKER LOG --\n'])
     # configuring logging
     logging.basicConfig(
         filename=LOG_FILE,
@@ -407,8 +421,6 @@ def main() -> None:
         datefmt='%Y-%m-%d [%H:%M:%S]',
         level=20, # INFO level
     )
-
-    # TODO format usage
     argparser = ArgumentParser(allow_abbrev=False)
     argparser.add_argument(
         '-i', '--insert',
