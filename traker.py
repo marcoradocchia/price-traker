@@ -30,9 +30,8 @@ USERAGENT_FALLBACK = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11\
     (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11"
 TIMEOUT = 5
 
+
 # UTILS
-
-
 def check_mail_addr(mail: str) -> None:
     if not match(r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$", mail):
         logging.error(f"'{mail}' is not a valid mail address")
