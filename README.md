@@ -24,7 +24,7 @@ with an aur-helper such as `yay`: `$ yay -S python-fake-useragent`.
 _Work in progress..._
 
 ## Usage
-```sh
+```
 usage: traker [-h] [-i <url> <mail>] [-l] [-r <title_substr> <mail>] [-u]
 
 options:
