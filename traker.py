@@ -155,7 +155,7 @@ def get_proxy_list() -> list:
 
 
 def get_date() -> str:
-    return f"{date.today().year}-{date.today().month}-{date.today().day}"
+    return str(date.today())
 
 
 def get_page(url: str, proxy: str) -> BeautifulSoup:
@@ -314,14 +314,9 @@ def insert_product(url: str, mail_addr: str) -> None:
                 sys_exit(f"WARNING: {warning_msg}")
             else:
                 # product already in product_list but mail_addr not in
-                # followers add mail_addr to followers and exit
+                # followers so add mail_addr to followers and exit
                 product["followers"].append(mail_addr)
                 title = product['title']
-                logging.info(
-                    f"'{mail_addr}' started tracking "
-                    f"'{title}' "
-                    f"({product['url']})"
-                )
                 write_list(products=product_list)
                 logging.info(
                     f"'{mail_addr}' started tracking '{title}' "
@@ -332,8 +327,11 @@ def insert_product(url: str, mail_addr: str) -> None:
                     f"({url})"
                 )
     # if product not found in product_list, add new entry to product_list
-    # may take a while since it retries util every price it's retrieved
-    infos = get_brute(proxies=get_proxy_list(), url=product["url"])
+    # get_brute function may take a while since it retries util every price
+    # it's retrieved
+    proxies = get_proxy_list()
+    print(f"{len(proxies)} proxies found")
+    infos = get_brute(proxies=proxies, url=url)
     product_list.append(
         {
             "url": url,
@@ -378,24 +376,38 @@ def remove_product(substr: str, mail_addr: str) -> None:
     for product in product_list:
         if substr.lower() in product["title"].lower():
             if mail_addr not in product["followers"]:
-                return
-            if (
-                input(
-                    f"Remove '{mail_addr}' from "
-                    f"'{product['title']}' followers list? [y/N]: "
-                ).lower()
-                == "y"
-            ):
-                product["followers"].remove(mail_addr)
-                write_list(products=product_list)
-                logging.info(
-                    f"'{mail_addr}' stopped tracking "
-                    f"'{product['title']}' "
-                    f"({product['url']})"
+                not_tracking_msg = (
+                    f"'{mail_addr}' is not tracking '{product['url']}'"
                 )
+                logging.error(not_tracking_msg)
+                sys_exit("ERROR: " + not_tracking_msg)
+            confirm_msg = (
+                f"Remove '{mail_addr}' from "
+                f"'{product['title']}' followers list? [y/N]: "
+            )
+            if input(confirm_msg).lower() == "y":
+                if len(product["followers"]) > 1:
+                    product["followers"].remove(mail_addr)
+                    info_msg = (
+                        f"'{mail_addr}' stopped tracking "
+                        f"'{product['title']}' "
+                        f"({product['url']})"
+                    )
+                    logging.info(info_msg)
+                    print(info_msg)
+                else:
+                    product_list.remove(product)
+                    info_msg = (
+                        f"'{product['title']}' ({product['url']}) removed"
+                    )
+                    logging.info(info_msg)
+                    print(info_msg)
+                write_list(products=product_list)
+            break
         else:
-            logging.warning(f"no tracked product matching query '{substr}'")
-            sys_exit(f"WARNING: no tracked product matching query '{substr}'")
+            warning_msg = (f"no tracked product matching query '{substr}'")
+            logging.warning(warning_msg)
+            sys_exit("WARNING: " + warning_msg)
 
 
 def update_prices() -> None:
@@ -425,7 +437,8 @@ def update_prices() -> None:
     #   'mail_addr2': 'mail_body2',
     # }
     for product in product_list:
-        # may take a while since it retries util every price it's retrieved
+        # get_brute function may take a while since it retries util every price
+        # it's retrieved
         infos = get_brute(proxies=proxies, url=product["url"])
         # checking if the product title
         # corresponds to the one we are looking for
@@ -531,9 +544,7 @@ def main() -> None:
     if len(argv) == 1:  # If no argument is given print help and exit
         argparser.print_help()
         argparser.exit(status=0)
-
     args = argparser.parse_args()
-
     if args.remove is not None:
         remove_product(args.remove[0], args.remove[1])
     if args.insert is not None:
