@@ -17,6 +17,8 @@ Both can be installed via `pip install beautifulsoup4 lxml`.
 ### Arch packages
 For **Arch Linux** users packages are available in the standard repos, hence
 for installation using pacman: `# pacman -S python-beautifulsoup4 python-lxml`.
+For the `fake-useragent` dependency **AUR** package available, the installation
+with an aur-helper such as `yay`: `yay -S python-fake-useragent`.
 
 ## Configuration
 _Work in progress..._
