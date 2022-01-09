@@ -12,12 +12,14 @@ from json import dumps as json_dumps
 from json import loads as json_loads
 from os import listdir, mkdir, rename
 from os.path import expanduser, isdir, isfile, join
+from random import choice
 from re import compile, match, IGNORECASE
 from requests import get
 from smtplib import SMTP_SSL
 from ssl import create_default_context
 from sys import argv
 from sys import exit as sys_exit
+from time import sleep
 
 
 XDG_CONFIG = expanduser("~/.config/price-traker")
@@ -26,9 +28,12 @@ CONFIG_FILE = join(XDG_CONFIG, "config")
 PRODUCT_LIST_FILE = join(XDG_DATA, "product_list.json")
 LOG_FILE = join(XDG_DATA, "traker.log")
 LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
-USERAGENT_FALLBACK = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11\
-    (KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11"
+USERAGENT_FALLBACK = (
+    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11"
+    "(KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11"
+)
 TIMEOUT = 5
+MAX_RETRIES = 3
 
 
 # UTILS
@@ -58,6 +63,46 @@ def check_url(url: str) -> None:
     if not match(url_regex, url):
         logging.error(f"'{url}' is not a valid URL")
         sys_exit(f"ERROR: '{url}' is not a valid URL")
+
+
+def get_brute(proxies: list, url: str, retries: int = 0) -> dict:
+    """
+    random user agent and rotating proxies to prevent request blocking
+    try to get page while proxies are available
+    (this loop prevents breaking in case a proxy is actually working but
+    gets blocked by the service)
+    """
+    if retries >= MAX_RETRIES:
+        logging.error("max retries reached, impossible to retrieve infos")
+        sys_exit("ERROR: max retries reached, impossible to retrieve infos")
+    infos = {
+        'title': None,
+        'price': None,
+    }
+    while len(proxies) > 0:
+        proxy = get_working_proxy(proxy_list=proxies)
+        print(f"{len(proxies)} available proxies remaining")
+        try:
+            page = get_page(url=url, proxy=proxy)
+            infos["price"] = get_price(page)
+            infos["title"] = page.find(id="productTitle").text.strip(" \n")
+            proxies.remove(proxy)  # remove used proxy from proxy list
+            break
+        except Exception as e:
+            logging.error(f"proxy {proxy} failed ({e})")
+            continue
+    # proxy list got empty before non-blocked ones could be found
+    if len(proxies) <= 0:
+        # if no working proxy was found or every working proxy was blocked
+        # then sleep 10 minutes until new proxy list is available
+        # then recursively run this function
+        print(
+            "Every proxy in list was not working or got blocked, waiting 10"
+            "minutes for next retry"
+        )
+        sleep(600)
+        get_brute(proxies=get_proxy_list(), url=url, retries=retries+1)
+    return infos
 
 
 def get_config() -> dict:
@@ -113,41 +158,36 @@ def get_date() -> str:
     return f"{date.today().year}-{date.today().month}-{date.today().day}"
 
 
-def get_page(url: str) -> BeautifulSoup:
-    # use random user agent and rotating proxies to prevent request blocking
-    proxy = get_working_proxy(proxy_list=get_proxy_list())
+def get_page(url: str, proxy: str) -> BeautifulSoup:
     print("Contacting server...")
-    try:
-        page = get(
-            url=url,
-            headers={"User-Agent": get_useragent()},
-            proxies={
-                "http": f"http://{proxy}",
-                "https": f"http://{proxy}",
-            },
-            timeout=60,
-        ).text
-        page = BeautifulSoup(page, "lxml")
-    except Exception as e:
-        logging.error(f"unable to load page '{url}' ({e})")
-        sys_exit(f"ERROR: unable to load page '{url}'")
+    page = get(
+        url=url,
+        headers={"User-Agent": get_useragent()},
+        proxies={
+            "http": f"http://{proxy}",
+            "https": f"http://{proxy}",
+        },
+        timeout=60,
+    ).text
+    page = BeautifulSoup(page, "lxml")
     return page
 
 
 def get_price(page: BeautifulSoup) -> float:
-    try:
-        price = page.find(class_="a-offscreen")  # this is for amazon only atm
-        price = float(price.text.strip("\n")[:-1].replace(",", "."))
-        return price
-    except Exception as e:
-        logging.error(f"unable to retrieve price information in page ({e})")
-        sys_exit("ERROR: unable to retrieve price information in page")
+    price = page.find(class_="a-offscreen")  # this is for AMAZON only atm
+    price = float(price.text.strip("\n")[:-1].replace(",", "."))
+    return price
 
 
 def get_working_proxy(proxy_list: list) -> str:
+    """
+    Looking for working proxy requesting httpbin.org/ip which returns a
+    json containing the ip: if ip matches, then return <proxy_ip>:<port>
+    as a string
+    """
     print("Looking for working proxy...")
     while len(proxy_list) > 0:
-        proxy = proxy_list.pop()
+        proxy = choice(proxy_list)  # select random proxy from list
         proxy_ip = proxy.split(":")[0]
         try:
             response = get(
@@ -160,22 +200,22 @@ def get_working_proxy(proxy_list: list) -> str:
             ).json()
             if response["origin"] == proxy_ip:
                 logging.info(f"using proxy {proxy_ip}")
-                print(f"Using proxy {proxy_ip}")
+                print(f"Using proxy: {proxy_ip}")
                 return proxy
         except Exception:
-            pass
+            # remove not working proxy from list
+            proxy_list.remove(proxy)
     logging.error("unable to find working proxy")
     sys_exit("ERROR: unable to find working proxy")
 
 
 def get_useragent() -> str:
     """
-    Return random useragent string using fake_useragent library for anonimity
-    and to prevent blocked requests.
-    Update UserAgent's cache monthly:
-    look for ~/.local/share/useragents_<month>.json: if exists and <month>
-    correspond to current month then use that cache, otherwhise rename file
-    to current month and upadte UserAgent cache.
+    Return random useragent string using fake_useragent library for
+    anonimity and to prevent blocked requests. Update UserAgent's cache
+    monthly: look for ~/.local/share/useragents_<month>.json: if exists and
+    <month> correspond to current month then use that cache, otherwhise
+    rename file to current month and upadte UserAgent cache.
     """
     xdg_data_files = listdir(XDG_DATA)
     need_cache_update = True
@@ -211,7 +251,7 @@ def check_data_dir() -> None:
 
 def write_list(products: list) -> None:
     with open(PRODUCT_LIST_FILE, "w+") as products_file:
-        products_file.write(json_dumps(products, indent=4))
+        products_file.write(json_dumps(products, indent=2))
 
 
 def get_list() -> list:
@@ -266,7 +306,8 @@ def insert_product(url: str, mail_addr: str) -> None:
         if product["url"] == url:
             if mail_addr in product["followers"]:
                 warning_msg = (
-                    f"'{mail_addr}' already tracking " f"'{product['url']}...'"
+                    f"'{mail_addr}' already tracking "
+                    f"'{product['url']}...'"
                 )
                 logging.warning(warning_msg)
                 # if mail_addr already in followers array, exit
@@ -275,33 +316,48 @@ def insert_product(url: str, mail_addr: str) -> None:
                 # product already in product_list but mail_addr not in
                 # followers add mail_addr to followers and exit
                 product["followers"].append(mail_addr)
+                title = product['title']
                 logging.info(
                     f"'{mail_addr}' started tracking "
-                    f"'{product['title']}' "
+                    f"'{title}' "
                     f"({product['url']})"
                 )
                 write_list(products=product_list)
-                return
+                logging.info(
+                    f"'{mail_addr}' started tracking '{title}' "
+                    f"({url})"
+                )
+                sys_exit(
+                    f"'{mail_addr}' started tracking '{title}' "
+                    f"({url})"
+                )
     # if product not found in product_list, add new entry to product_list
-    page = get_page(url=url)
-    try:
-        # TODO amazon only atm
-        title = page.find(id="productTitle").text.strip(" \n")
-    except Exception as e:
-        logging.error(f"no id found at given url page ({e})")
-        sys_exit("ERROR: no id found at given url page")
+    # may take a while since it retries util every price it's retrieved
+    infos = get_brute(proxies=get_proxy_list(), url=product["url"])
     product_list.append(
         {
             "url": url,
-            "title": title,
+            "title": infos["title"],
             "followers": [mail_addr],
-            "prices": [{"date": get_date(), "price": get_price(page)}],
+            "prices": [
+                {
+                    "date": get_date(),
+                    "price": infos["price"]
+                }
+            ],
         }
     )
-    logging.info(f"'{mail_addr}' started tracking " f"'{title}' " f"({url})")
     # write updated product_list to PRODUCT_LIST_FILE
     write_list(products=product_list)
-    print("Done")
+    logging.info(
+        f"'{mail_addr}' started tracking '{infos['title']}' "
+        f"({url})"
+    )
+    sys_exit(
+        f"'{mail_addr}' started tracking '{infos['title']}' "
+        f"({url})\n"
+        "Done"
+    )
 
 
 def list_products() -> None:
@@ -343,25 +399,47 @@ def remove_product(substr: str, mail_addr: str) -> None:
 
 
 def update_prices() -> None:
-    product_list = get_list()
+    # list of product whose price is not up to date and needs to be updated
+    product_list = []
     today = get_date()
+    for product in get_list():
+        # if the last price update is today,
+        # ignore updating price for that product
+        if product["prices"][-1]["date"] == today:
+            print(f"{product['title'][:50]} price up to date")
+            continue
+        else:
+            product_list.append(product)
+    if len(product_list) == 0:
+        sys_exit("Done")
+    proxies = get_proxy_list()
+    print(f"{len(proxies)} proxies found")
     # exit on empty product_list
     if len(product_list) == 0:
         logging.warning("update request with empty product list")
         sys_exit("WARNING: no products tracking list")
+    notification_queue = {}
     # notification_queue object structure:
     # {
     #   'mail_addr1': 'mail_body1',
     #   'mail_addr2': 'mail_body2',
     # }
-    notification_queue = {}
     for product in product_list:
-        # if the last price update is today,
-        # ignore updating price for that product
-        if product["prices"][-1]["date"] == today:
+        # may take a while since it retries util every price it's retrieved
+        infos = get_brute(proxies=proxies, url=product["url"])
+        # checking if the product title
+        # corresponds to the one we are looking for
+        if infos["title"] != product["title"]:
+            logging.warning(
+                f"{product['url']} does not correspond to given product"
+                "title... skipping"
+            )
+            print(
+                f"{product['url']} does not correspond to given product"
+                "title... skipping"
+            )
             continue
-        page = get_page(url=product["url"])
-        today_price = get_price(page)
+        today_price = infos["price"]
         product["prices"].append({"date": today, "price": today_price})
         prev_price = product["prices"][-2]["price"]
         price_delta = round(today_price - prev_price, 2)
@@ -386,6 +464,10 @@ def update_prices() -> None:
                     notification_queue[follower] = notification_body
     # write updated product_list to PRODUCT_LIST_FILE
     write_list(products=product_list)
+    if len(notification_queue) == 0:
+        logging.info("No lower prices detected")
+        sys_exit("No lower prices detected\nDone")
+    print("Sending e-mail notifications...")
     # mail
     for mail_addr in notification_queue:
         send_notification(
