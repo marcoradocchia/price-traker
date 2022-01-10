@@ -1,9 +1,9 @@
 # Price Traker: price tracking tool
 This is a simple tool to track lowering prices of products on various
-websites[1].
+websites[^1].
 The idea behind this tool is to create a tracking list, in order to check for
-the product list items' prices periodically, using fake useragents and rotating
-proxies for anonimity and preventing sites to block http requests.
+the product list items' prices periodically[^2], using fake useragents and
+rotating proxies for anonimity and preventing sites to block http requests.
 
 ## Dependencies
 The tool has very minimal dependencies, considering that it uses Python's
@@ -11,8 +11,7 @@ integrated libraries for most of the work:
 - `beautifulsoup4`;
 - `fake-useragent`;
 - `lxml` (as BeautifulSoup documentation recommends it for speed);
-
-Both can be installed via `pip install beautifulsoup4 lxml fake-useragent`.
+these be installed via `pip install beautifulsoup4 lxml fake-useragent`.
 
 ### Arch packages
 For **Arch Linux** users packages are available in the standard repos, hence
@@ -21,7 +20,29 @@ For the `fake-useragent` dependency **AUR** package available, the installation
 with an aur-helper such as `yay`: `$ yay -S python-fake-useragent`.
 
 ## Configuration
-_Work in progress..._
+Configuration file needs to be created manually and located at
+`~/.config/price-traker/config`.
+The tool manages configuration using python's `configparser` library, which
+requires INI file structure as stated in the library's
+[documentation](https://docs.python.org/3/library/configparser.html#supported-ini-file-structure).
+
+The `[mail]` section is required, as well as the options illustrated in the
+example configuration below, where the angled brackets placeholder need to be
+replaced with actual values.
+```
+[mail]
+smtp_server = <smtp_server>
+port = <smtp_port>
+notifier_addr = <email_address>
+notifier_psw = <email_password>
+```
+## Log and Data
+Log and data files are stored locally at `~/.local/share/price-traker/`, which
+is auto-generated if not present.
+The directory will contain:
+- `product_list.json`;
+- `traker.log`;
+- `useragents_{1..12}.json` (file autoupdated every month containing fake-useragent data).
 
 ## Usage
 ```
@@ -38,19 +59,12 @@ options:
                         indicates a substring of the product title)
   -u, --update          update prices for every product
 ```
+| Flag | Description |
+| :---: | :--- |
+| `-i`, `--insert` | **Add** new product to the tracking list; `<url>` represents the tracked product's url, while `<mail>` the address receiving notifications on lowering price |
+| `-r`, `--remove` | **Remove** product from the tracking list; `<mail>` represents the user willing to stop tracking some product and `<title_substr>` represents some title's substring of the product |
+| `-u`, `--update` | **Updates** all tracked products' prices and notifies via e-mail about the products with lowering prices |
+| `-l`, `--list` | **List** all tracked product and corresponding product followers |
 
-In order to add a new product to the tracking list use the `-i, --insert`
-option with the first argument being the product's URL and the second the
-e-mail for notifications.
-
-In order to remove a product from the from the tracking list use the `-r,
---remove` option with the only argument being a _prefix_ of the product's
-name.
-
-Update option `-u, --update` updates product list items' prices and notifies
-via e-mail about the products with lowering prices.
-
-In order to know what products are being tracked and list them use `-l, --list`
-option.
-
-^[1] Currently only _Amazon_ supported
+[^1]: Currently only _Amazon_ supported
+[^2]: e.g. running a cronjob on a Raspberry Pi
