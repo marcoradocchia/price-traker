@@ -11,7 +11,8 @@ integrated libraries for most of the work:
 - `beautifulsoup4`;
 - `fake-useragent`;
 - `lxml` (as BeautifulSoup documentation recommends it for speed);
-these be installed via `pip install beautifulsoup4 lxml fake-useragent`.
+
+these can be installed via `pip install beautifulsoup4 lxml fake-useragent`.
 
 ### Arch packages
 For **Arch Linux** users packages are available in the standard repos, hence
