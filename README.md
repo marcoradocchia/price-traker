@@ -61,10 +61,10 @@ options:
 ```
 | Flag | Description |
 | :--- | :--- |
-| `-i`, `--insert` | **Add** new product to the tracking list; `<url>` represents the tracked product's url, while `<mail>` the address receiving notifications on lowering price |
-| `-r`, `--remove` | **Remove** product from the tracking list; `<mail>` represents the user willing to stop tracking some product and `<title_substr>` represents some title's substring of the product |
-| `-u`, `--update` | **Updates** all tracked products' prices and notifies via e-mail about the products with lowering prices |
-| `-l`, `--list` | **List** all tracked product and corresponding product followers |
+| `-i` | **Add** new product to the tracking list; `<url>` represents the tracked product's url, while `<mail>` the address receiving notifications on lowering price |
+| `-r` | **Remove** product from the tracking list; `<mail>` represents the user willing to stop tracking some product and `<title_substr>` represents some title's substring of the product |
+| `-u` | **Updates** all tracked products' prices and notifies via e-mail about the products with lowering prices |
+| `-l` | **List** all tracked product and corresponding product followers |
 
 [^1]: Currently only _Amazon_ supported
 [^2]: e.g. running a cronjob on a Raspberry Pi
