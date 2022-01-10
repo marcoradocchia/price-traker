@@ -60,7 +60,7 @@ options:
   -u, --update          update prices for every product
 ```
 | Flag | Description |
-| :---: | :--- |
+| :--- | :--- |
 | `-i`, `--insert` | **Add** new product to the tracking list; `<url>` represents the tracked product's url, while `<mail>` the address receiving notifications on lowering price |
 | `-r`, `--remove` | **Remove** product from the tracking list; `<mail>` represents the user willing to stop tracking some product and `<title_substr>` represents some title's substring of the product |
 | `-u`, `--update` | **Updates** all tracked products' prices and notifies via e-mail about the products with lowering prices |
