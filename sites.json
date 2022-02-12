@@ -1,0 +1,22 @@
+{
+  "amazon": {
+    "title": "productTitle",
+    "price": "a-offscreen"
+  },
+  "euronics": {
+    "title": "h3 font-bold productFeaturesName",
+    "price": "mb-0 price pcs-price font-bold"
+  },
+  "mediaworld": {
+    "title": "product-name hidden-xs",
+    "price": "price mw-price enhanced"
+  },
+  "unieuro": {
+    "title": "pdp-right__title",
+    "price": "pdp-right__price"
+  },
+  "ikea": {
+    "title": "range-revamp-header-section__title--big notranslate",
+    "price": "range-revamp-price__integer"
+  }
+}
