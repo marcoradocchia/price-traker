@@ -32,6 +32,11 @@ USERAGENT_FALLBACK = (
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11"
     "(KHTML, like Gecko) Chrome/17.0.963.56 Safari/535.11"
 )
+PROXY_LIST_API_URL = (
+    "https://proxylist.geonode.com/api/proxy-list?"
+    "limit=50&page=1&sort_by=lastChecked&sort_type="
+    "desc&anonymityLevel=elite&anonymityLevel=anonymous"
+)
 TIMEOUT = 5
 MAX_RETRIES = 3
 
@@ -76,8 +81,8 @@ def get_brute(proxies: list, url: str, retries: int = 0) -> dict:
         logging.error("max retries reached, impossible to retrieve infos")
         sys_exit("ERROR: max retries reached, impossible to retrieve infos")
     infos = {
-        'title': None,
-        'price': None,
+        "title": None,
+        "price": None,
     }
     while len(proxies) > 0:
         proxy = get_working_proxy(proxy_list=proxies)
@@ -97,11 +102,11 @@ def get_brute(proxies: list, url: str, retries: int = 0) -> dict:
         # then sleep 10 minutes until new proxy list is available
         # then recursively run this function
         print(
-            "Every proxy in list was not working or got blocked, waiting 10"
+            "every proxy in list was not working or got blocked, waiting 10"
             "minutes for next retry"
         )
         sleep(600)
-        get_brute(proxies=get_proxy_list(), url=url, retries=retries+1)
+        get_brute(proxies=get_proxy_list(), url=url, retries=retries + 1)
     return infos
 
 
@@ -127,27 +132,23 @@ def get_config() -> dict:
         config_opts["mail"]["smtp_server"] = smtp_server
         config_opts["mail"]["port"] = config.get("mail", "port")
         config_opts["mail"]["notifier_addr"] = notifier_addr
-        config_opts["mail"]["notifier_psw"] =\
-            config.get("mail", "notifier_psw")
+        config_opts["mail"]["notifier_psw"] = config.get(
+            "mail", "notifier_psw"
+        )
     return config_opts
 
 
 def get_proxy_list() -> list:
     print("Retrieving proxy list...")
     try:
-        response = get(
-            "https://free-proxy-list.net/",
-            headers={"User-Agent": get_useragent()},
-        )
-        soup = BeautifulSoup(response.content, "lxml")
-        table = soup.find("tbody")
         proxies = []
-        for row in table:
-            if row.find_all("td")[4].text == "elite proxy":
-                proxy = ":".join(
-                    [row.find_all("td")[0].text, row.find_all("td")[1].text]
-                )
-                proxies.append(proxy)
+        response = get(
+            PROXY_LIST_API_URL,
+            headers={"User-Agent": get_useragent()},
+        ).json()
+        print(f"{response['total']} proxies found")
+        for proxy in response["data"]:
+            proxies.append(f"{proxy['ip']}:{proxy['port']}")
         return proxies
     except Exception as e:
         logging.error(f"unable to get proxy list ({e})")
@@ -220,8 +221,7 @@ def get_useragent() -> str:
     xdg_data_files = listdir(XDG_DATA)
     need_cache_update = True
     useragents_file = join(
-        XDG_DATA,
-        "useragents_" + str(date.today().month) + ".json"
+        XDG_DATA, "useragents_" + str(date.today().month) + ".json"
     )
     for file in xdg_data_files:
         if "useragents" in file:
@@ -289,8 +289,7 @@ def send_notification(mail_addr: str, mail_body: str) -> None:
                 logging.info(f"mail notification sent to {mail_addr}")
         except Exception as e:
             logging.error(
-                "unable to send mail notification "
-                f"to '{mail_addr}' ({e})"
+                "unable to send mail notification " f"to '{mail_addr}' ({e})"
             )
             print(f"unable to send mail notification to '{mail_addr}'")
 
@@ -306,8 +305,7 @@ def insert_product(url: str, mail_addr: str) -> None:
         if product["url"] == url:
             if mail_addr in product["followers"]:
                 warning_msg = (
-                    f"'{mail_addr}' already tracking "
-                    f"'{product['url']}...'"
+                    f"'{mail_addr}' already tracking " f"'{product['url']}...'"
                 )
                 logging.warning(warning_msg)
                 # if mail_addr already in followers array, exit
@@ -316,40 +314,31 @@ def insert_product(url: str, mail_addr: str) -> None:
                 # product already in product_list but mail_addr not in
                 # followers so add mail_addr to followers and exit
                 product["followers"].append(mail_addr)
-                title = product['title']
+                title = product["title"]
                 write_list(products=product_list)
                 logging.info(
-                    f"'{mail_addr}' started tracking '{title}' "
-                    f"({url})"
+                    f"'{mail_addr}' started tracking '{title}' " f"({url})"
                 )
                 sys_exit(
-                    f"'{mail_addr}' started tracking '{title}' "
-                    f"({url})"
+                    f"'{mail_addr}' started tracking '{title}' " f"({url})"
                 )
     # if product not found in product_list, add new entry to product_list
     # get_brute function may take a while since it retries util every price
     # it's retrieved
     proxies = get_proxy_list()
-    print(f"{len(proxies)} proxies found")
     infos = get_brute(proxies=proxies, url=url)
     product_list.append(
         {
             "url": url,
             "title": infos["title"],
             "followers": [mail_addr],
-            "prices": [
-                {
-                    "date": get_date(),
-                    "price": infos["price"]
-                }
-            ],
+            "prices": [{"date": get_date(), "price": infos["price"]}],
         }
     )
     # write updated product_list to PRODUCT_LIST_FILE
     write_list(products=product_list)
     logging.info(
-        f"'{mail_addr}' started tracking '{infos['title']}' "
-        f"({url})"
+        f"'{mail_addr}' started tracking '{infos['title']}' " f"({url})"
     )
     sys_exit(
         f"'{mail_addr}' started tracking '{infos['title']}' "
@@ -405,7 +394,7 @@ def remove_product(substr: str, mail_addr: str) -> None:
                 write_list(products=product_list)
             break
         else:
-            warning_msg = (f"no tracked product matching query '{substr}'")
+            warning_msg = f"no tracked product matching query '{substr}'"
             logging.warning(warning_msg)
             sys_exit("WARNING: " + warning_msg)
 
@@ -521,7 +510,7 @@ def main() -> None:
         "-l",
         "--list",
         action="store_true",
-        help="list all the tracked products"
+        help="list all the tracked products",
     )
     argparser.add_argument(
         "-r",
@@ -538,7 +527,7 @@ def main() -> None:
         "-u",
         "--update",
         action="store_true",
-        help="update prices for every product"
+        help="update prices for every product",
     )
 
     if len(argv) == 1:  # If no argument is given print help and exit
